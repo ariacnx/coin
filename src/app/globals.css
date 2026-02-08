@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-paper: #f8f7f2;
+  --ink-sumi: #4a4a4a;
+  --gold-kintsugi: #d4af37;
+  --accent-ajisai: #8c92ac;
+}
+
+body {
+  background-color: var(--bg-paper);
+  color: var(--ink-sumi);
+  -webkit-font-smoothing: antialiased;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.05);
+}
+
+.input-underline {
+  background: transparent;
+  border-bottom: 1px solid #e5e5e5;
+  transition: border-color 0.3s ease;
+}
+.input-underline:focus {
+  outline: none;
+  border-color: var(--accent-ajisai);
+}
