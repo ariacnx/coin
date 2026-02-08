@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function HomePage() {
-  const router = useRouter();
   const [decision, setDecision] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16,21 +14,40 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
 
-    const res = await fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ payload: { decision: decision.trim() } }),
-      credentials: "include",
-    });
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payload: { decision: decision.trim() } }),
+        credentials: "include",
+      });
 
-    if (!res.ok) {
-      setError("Could not start. Try again.");
+      if (!res.ok) {
+        let msg = "Could not start. Try again.";
+        try {
+          const data = await res.json().catch(() => ({}));
+          if (data?.error) msg += ` (${data.error})`;
+          else msg += ` (${res.status})`;
+        } catch {
+          msg += ` (${res.status})`;
+        }
+        setError(msg);
+        return;
+      }
+
+      const s = await res.json();
+      const id = s?.id;
+      if (id) {
+        // Use full navigation so the session page loads with the new session
+        window.location.href = `/session/${id}`;
+      } else {
+        setError("Could not start. Try again. (no session id)");
+      }
+    } catch (err) {
+      setError("Could not start. Try again. (network error)");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const s = await res.json();
-    router.push(`/session/${s.id}`);
   }
 
   return (

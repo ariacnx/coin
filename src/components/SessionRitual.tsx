@@ -32,6 +32,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
   } | null>(null);
   const [llmLoading, setLlmLoading] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
+  const [coinFlipping, setCoinFlipping] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
   const [registerEmail, setRegisterEmail] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
@@ -67,10 +68,15 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
   };
 
   const performToss = () => {
+    if (coinFlipping) return;
+    setCoinFlipping(true);
     const isHeads = Math.random() > 0.5;
     const result = isHeads ? "YES" : "NO";
     savePayload({ tossResult: result });
-    setTimeout(() => setPhase("result"), 1800);
+    setTimeout(() => {
+      setPhase("result");
+      setCoinFlipping(false);
+    }, 1800);
   };
 
   const selectReaction = (reaction: string) => {
@@ -273,13 +279,21 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
         {showPhase("toss") && (
           <section className="absolute inset-0 flex flex-col items-center justify-center">
             <div
+              className={`coin-container cursor-pointer mb-8 ${coinFlipping ? "pointer-events-none" : ""}`}
               onClick={performToss}
-              className="w-40 h-40 rounded-full cursor-pointer flex items-center justify-center text-4xl font-light bg-gradient-to-br from-amber-400 via-kintsugi to-amber-800 text-white shadow-lg border-4 border-white/30"
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && performToss()}
+              aria-label="Tap to toss the coin"
             >
-              ?
+              <div className={`coin ${coinFlipping ? "flip" : ""}`}>
+                <span className="text-4xl font-light">?</span>
+              </div>
             </div>
-            <p className="text-xs uppercase tracking-[0.3em] text-gray-400 mt-8">Phase IV: The Catalyst</p>
-            <p className="text-lg font-light mt-2 animate-pulse">Tap the coin to release control.</p>
+            <p className="text-xs uppercase tracking-[0.3em] text-gray-400 mt-2">Phase IV: The Catalyst</p>
+            <p className={`text-lg font-light mt-2 transition-opacity duration-300 ${coinFlipping ? "opacity-0" : "animate-pulse"}`}>
+              Tap the coin to release control.
+            </p>
           </section>
         )}
 

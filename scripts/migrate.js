@@ -1,14 +1,33 @@
 /**
- * Run DB migrations. Uses POSTGRES_URL from env.
- * Usage: POSTGRES_URL="postgres://..." node scripts/migrate.js
+ * Run DB migrations. Uses POSTGRES_URL from .env.local or env.
+ * Usage: npm run db:migrate   (reads .env.local)
+ *    or: POSTGRES_URL="postgres://..." npm run db:migrate
  */
 const { Pool } = require("pg");
 const fs = require("fs");
 const path = require("path");
 
+// Load .env.local so npm run db:migrate works without passing POSTGRES_URL
+const envPath = path.join(__dirname, "..", ".env.local");
+try {
+  const env = fs.readFileSync(envPath, "utf8");
+  for (const line of env.split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq > 0) {
+      const key = line.slice(0, eq).trim();
+      let value = line.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+        value = value.slice(1, -1);
+      process.env[key] = value;
+    }
+  }
+} catch {
+  // .env.local optional if POSTGRES_URL already set
+}
+
 const url = process.env.POSTGRES_URL;
-if (!url || url.includes("placeholder") || url.includes("localhost")) {
-  console.error("Set POSTGRES_URL to your hosted Postgres connection string.");
+if (!url || url.includes("placeholder")) {
+  console.error("Set POSTGRES_URL in .env.local or run: POSTGRES_URL=\"...\" npm run db:migrate");
   process.exit(1);
 }
 

@@ -32,21 +32,27 @@ export async function GET(req: Request) {
 const postSchema = z.object({ payload: z.record(z.unknown()).default({}) });
 
 export async function POST(req: Request) {
-  const userId = await getOrCreateGuestUser(req);
-  const parsed = postSchema.safeParse(await req.json());
-  if (!parsed.success) {
-    return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
-  }
+  try {
+    const userId = await getOrCreateGuestUser(req);
+    const parsed = postSchema.safeParse(await req.json());
+    if (!parsed.success) {
+      return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
+    }
 
-  const r = await pool.query(
-    "insert into sessions (user_id, payload_json) values ($1, $2) returning id, created_at, updated_at, payload_json",
-    [userId, JSON.stringify(parsed.data.payload)]
-  );
-  const row = r.rows[0];
-  return NextResponse.json({
-    id: row.id,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    payload: row.payload_json,
-  });
+    const r = await pool.query(
+      "insert into sessions (user_id, payload_json) values ($1, $2) returning id, created_at, updated_at, payload_json",
+      [userId, JSON.stringify(parsed.data.payload)]
+    );
+    const row = r.rows[0];
+    return NextResponse.json({
+      id: row.id,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      payload: row.payload_json,
+    });
+  } catch (err) {
+    console.error("[POST /api/sessions]", err);
+    const message = err instanceof Error ? err.message : "server_error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
