@@ -13,51 +13,57 @@ function getIp(req: Request): string {
   );
 }
 
+function json500(detail: string) {
+  return NextResponse.json(
+    { error: "llm_error", detail },
+    { status: 500, headers: { "Cache-Control": "no-store" } }
+  );
+}
+
 export async function POST(req: Request) {
-  const ip = getIp(req);
-  const rlIp = await ratelimitPerIp.limit(ip);
-  if (!rlIp.success) {
-    return NextResponse.json({ error: "rate_limit_exceeded" }, { status: 429 });
-  }
-
-  let userId: string;
   try {
-    userId = await requireUser(req);
-  } catch {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+    const ip = getIp(req);
+    const rlIp = await ratelimitPerIp.limit(ip);
+    if (!rlIp.success) {
+      return NextResponse.json({ error: "rate_limit_exceeded" }, { status: 429 });
+    }
 
-  const rlUser = await ratelimitPerUser.limit(userId);
-  if (!rlUser.success) {
-    return NextResponse.json({ error: "rate_limit_exceeded" }, { status: 429 });
-  }
+    let userId: string;
+    try {
+      userId = await requireUser(req);
+    } catch {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
 
-  const { allowed, remaining } = await checkLlmQuota(userId);
-  if (!allowed) {
-    return NextResponse.json(
-      { error: "quota_exceeded", remaining: 0 },
-      { status: 402 }
-    );
-  }
+    const rlUser = await ratelimitPerUser.limit(userId);
+    if (!rlUser.success) {
+      return NextResponse.json({ error: "rate_limit_exceeded" }, { status: 429 });
+    }
 
-  let body: { context?: string };
-  try {
-    body = (await req.json()) as { context?: string };
-  } catch {
-    body = {};
-  }
+    const { allowed, remaining } = await checkLlmQuota(userId);
+    if (!allowed) {
+      return NextResponse.json(
+        { error: "quota_exceeded", remaining: 0 },
+        { status: 402 }
+      );
+    }
 
-  const context = typeof body.context === "string" ? body.context : "";
+    let body: { context?: string };
+    try {
+      body = (await req.json()) as { context?: string };
+    } catch {
+      body = {};
+    }
 
-  const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    const context = typeof body.context === "string" ? body.context : "";
 
-  const systemPrompt = `You are a Mirror, not an Oracle. Your role is to reflect back insights about the user's decision-making context—questions they might not have asked, patterns you notice, and a brief summary—without prescribing what they should do. Be concise and supportive.`;
+    const systemPrompt = `You are a Mirror, not an Oracle. Your role is to reflect back insights about the user's decision-making context—questions they might not have asked, patterns you notice, and a brief summary—without prescribing what they should do. Be concise and supportive.`;
 
-  const userPrompt = context
-    ? `The user shared this decision context:\n\n${context}\n\nRespond with a JSON object containing exactly these keys: "questions" (array of 2-4 reflective questions), "summary" (1-2 sentence summary), "patternHint" (one short observation about a pattern).`
-    : `The user has not shared context yet. Respond with a JSON object containing: "questions" (array of 2-3 generic reflective questions), "summary" (empty string), "patternHint" (empty string).`;
+    const userPrompt = context
+      ? `The user shared this decision context:\n\n${context}\n\nRespond with a JSON object containing exactly these keys: "questions" (array of 2-4 reflective questions), "summary" (1-2 sentence summary), "patternHint" (one short observation about a pattern).`
+      : `The user has not shared context yet. Respond with a JSON object containing: "questions" (array of 2-3 generic reflective questions), "summary" (empty string), "patternHint" (empty string).`;
 
-  try {
+    const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -84,10 +90,9 @@ export async function POST(req: Request) {
       remaining,
     });
   } catch (err) {
-    console.error("OpenAI error:", err);
-    return NextResponse.json(
-      { error: "llm_error" },
-      { status: 500 }
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("LLM REFLECT ERROR:", message);
+    if (err instanceof Error && err.cause) console.error("LLM REFLECT CAUSE:", err.cause);
+    return json500(message);
   }
 }

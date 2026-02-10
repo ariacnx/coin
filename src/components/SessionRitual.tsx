@@ -148,7 +148,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       if (data.error === "quota_exceeded") setLlmError("Quota exceeded (10 free calls).");
-      else setLlmError("Something went wrong.");
+      else setLlmError(data.detail ?? "Something went wrong.");
       return;
     }
     const data = await res.json();
