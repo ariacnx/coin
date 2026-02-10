@@ -33,8 +33,6 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
   });
   const [llm, setLlm] = useState<{
     questions: string[];
-    summary: string;
-    patternHint: string;
     remaining: number;
   } | null>(null);
   const [llmLoading, setLlmLoading] = useState(false);
@@ -315,7 +313,18 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
     if (DEBUG_INSIGHT) {
       console.log("[INSIGHT] reflectWithAI success", data);
     }
-    setLlm({ questions: data.questions, summary: data.summary, patternHint: data.patternHint, remaining: data.remaining });
+    const questions = Array.isArray(data.questions)
+      ? data.questions.filter((q: unknown) => typeof q === "string" && q.trim().length > 0)
+      : [];
+    const placeholderQuestions = [
+      "What do you already know is true, but have been avoiding?",
+      "If you removed fear of disappointing others, what would you choose?",
+      "What is one small step that would move you toward relief today?",
+    ];
+    setLlm({
+      questions: questions.length > 0 ? questions : placeholderQuestions,
+      remaining: typeof data.remaining === "number" ? data.remaining : 0,
+    });
 
     // Keep the main Insight panel in sync with Mirror output
     const mirrorInsight = [data.summary, data.patternHint]
@@ -470,6 +479,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
     (selectedCategory === "others" && payload.categoryOther.trim().length > 0);
   const fallbackInsight = payload.reaction ? deriveInsight(payload.reaction, payload.tossResult).insight : "";
   const visibleInsight = payload.insight || fallbackInsight;
+  const insightText = visibleInsight || "No insight yet. Click 'Generate insight with AI' to populate this section.";
 
   const showPhase = (p: Phase) => phase === p;
 
@@ -785,8 +795,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
               </p>
             </div>
 
-            <div className="bg-paper p-8 rounded-2xl border border-gray-200 mb-8 relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-1 h-full bg-kintsugi" />
+            <div className="mb-8">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <h3 className="text-xs uppercase tracking-widest text-ajisai">Insight</h3>
                 <button
@@ -797,15 +806,11 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
                   {insightLoading ? "Generating..." : "Generate insight with AI"}
                 </button>
               </div>
-              <div className="bg-white/80 border border-gray-100 rounded-xl px-5 py-4 min-h-[92px]">
-                {insightLoading ? (
-                  <p className="text-sm text-gray-500">Generating insight...</p>
-                ) : (
-                  <p className="text-base md:text-lg leading-relaxed font-light text-gray-800 whitespace-pre-line">
-                    {visibleInsight || "No insight yet. Click 'Generate insight with AI' to populate this section."}
-                  </p>
-                )}
-              </div>
+              <textarea
+                readOnly
+                value={insightLoading ? "Generating insight..." : insightText}
+                className="w-full min-h-[160px] rounded-xl border border-gray-300 bg-white px-4 py-3 text-base leading-relaxed text-gray-900 resize-y"
+              />
               {insightError && <p className="text-sm text-red-500 mt-3">{insightError}</p>}
               {DEBUG_INSIGHT && (
                 <div className="mt-3 text-[11px] text-gray-500 bg-white/70 border border-gray-100 rounded-lg px-3 py-2">
@@ -917,18 +922,6 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
                           <li key={i}>{q}</li>
                         ))}
                       </ul>
-                    </div>
-                  )}
-                  {llm.summary && (
-                    <div>
-                      <span className="text-xs uppercase tracking-widest text-gray-400">Summary</span>
-                      <p className="mt-2 text-gray-700">{llm.summary}</p>
-                    </div>
-                  )}
-                  {llm.patternHint && (
-                    <div>
-                      <span className="text-xs uppercase tracking-widest text-gray-400">Pattern</span>
-                      <p className="mt-2 text-gray-700">{llm.patternHint}</p>
                     </div>
                   )}
                   <p className="text-xs text-gray-400">LLM calls remaining: {llm.remaining}</p>
