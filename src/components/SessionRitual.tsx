@@ -14,7 +14,7 @@ type CategoryOption = "career" | "relationship" | "others";
 type SpeechField = "decision" | "q-regret" | "q-fear" | "q-future" | "categoryOther";
 
 export function SessionRitual({ sessionId, initialPayload, isGuest = false }: SessionRitualProps) {
-  const DEBUG_INSIGHT = true;
+  const DEBUG_INSIGHT = false;
   const startPhase: Phase = initialPayload.decision
     ? (initialPayload.category ? "reflection" : "category")
     : "intention";
@@ -64,6 +64,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
   const [registerError, setRegisterError] = useState<string | null>(null);
   const guestStorageHydratedRef = useRef(false);
   const payloadRef = useRef(payload);
+  const lastAutoInsightKeyRef = useRef("");
   const guestStorageKey = `kettei:guest:session:${sessionId}`;
 
   useEffect(() => {
@@ -275,17 +276,20 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
     );
   };
 
-  const buildReflectContext = () =>
-    [
-      payload.decision,
-      payload["q-regret"],
-      payload["q-fear"],
-      payload["q-future"],
-      payload.tossResult,
-      payload.reaction,
-    ]
-      .filter(Boolean)
-      .join("\n");
+  const buildReflectContext = useCallback(
+    () =>
+      [
+        payload.decision,
+        payload["q-regret"],
+        payload["q-fear"],
+        payload["q-future"],
+        payload.tossResult,
+        payload.reaction,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    [payload]
+  );
 
   const reflectWithAI = async () => {
     setLlmLoading(true);
@@ -339,7 +343,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
     }
   };
 
-  const generateInsightWithAI = async () => {
+  const generateInsightWithAI = useCallback(async () => {
     setInsightLoading(true);
     setInsightError(null);
     const context = buildReflectContext();
@@ -382,7 +386,28 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
     }
 
     await savePayload({ insight: nextInsight });
-  };
+  }, [buildReflectContext, savePayload]);
+
+  useEffect(() => {
+    if (phase !== "analysis") return;
+    if (insightLoading) return;
+    if (payload.insight && payload.insight.trim().length > 0) return;
+    if (!payload.reaction || !payload.tossResult) return;
+
+    const key = `${sessionId}|${payload.reaction}|${payload.tossResult}|${payload.decision}`;
+    if (lastAutoInsightKeyRef.current === key) return;
+    lastAutoInsightKeyRef.current = key;
+    void generateInsightWithAI();
+  }, [
+    phase,
+    insightLoading,
+    payload.insight,
+    payload.reaction,
+    payload.tossResult,
+    payload.decision,
+    sessionId,
+    generateInsightWithAI,
+  ]);
 
   const analyzePastHighlights = async () => {
     setHighlightsLoading(true);
@@ -786,6 +811,71 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
             </p>
 
             <div className="mb-8">
+              <p className="text-xs uppercase tracking-widest text-ajisai mb-3">Prompt 1: Insight</p>
+              <button
+                onClick={generateInsightWithAI}
+                disabled={insightLoading}
+                className="px-4 py-1.5 rounded-full border border-kintsugi text-kintsugi hover:bg-kintsugi hover:text-white transition-colors text-[10px] uppercase tracking-widest disabled:opacity-50 mb-3"
+              >
+                {insightLoading ? "Generating..." : "Testing retry button"}
+              </button>
+              <textarea
+                readOnly
+                value={insightLoading ? "Generating insight..." : insightText}
+                className="w-full min-h-[120px] rounded-xl border border-gray-300 bg-white px-4 py-3 text-base leading-relaxed text-gray-900 resize-y"
+              />
+              {insightError && <p className="text-sm text-red-500 mt-2">{insightError}</p>}
+            </div>
+
+            <div className="mb-8">
+              <p className="text-xs uppercase tracking-widest text-ajisai mb-3">Prompt 2: Analyze past highlights</p>
+              <button
+                onClick={analyzePastHighlights}
+                disabled={highlightsLoading}
+                className="px-5 py-2 rounded-full border border-kintsugi text-kintsugi hover:bg-kintsugi hover:text-white transition-colors text-xs uppercase tracking-widest disabled:opacity-50 mb-3"
+              >
+                {highlightsLoading ? "Analyzing..." : "Run prompt 2"}
+              </button>
+              <textarea
+                readOnly
+                value={
+                  highlightsAnalysis
+                    ? [
+                        `Pattern: ${highlightsAnalysis.pattern || "n/a"}`,
+                        `Guidance: ${highlightsAnalysis.guidance || "n/a"}`,
+                        `Next action: ${highlightsAnalysis.nextAction || "n/a"}`,
+                        `LLM calls remaining: ${highlightsAnalysis.remaining}`,
+                      ].join("\n\n")
+                    : "No response yet."
+                }
+                className="w-full min-h-[120px] rounded-xl border border-gray-300 bg-white px-4 py-3 text-base leading-relaxed text-gray-900 resize-y"
+              />
+              {highlightsError && <p className="text-sm text-red-500 mt-2">{highlightsError}</p>}
+            </div>
+
+            <div className="mb-8">
+              <p className="text-xs uppercase tracking-widest text-ajisai mb-3">Prompt 3: Reflection question</p>
+              <button
+                onClick={reflectWithAI}
+                disabled={llmLoading}
+                className="px-6 py-3 rounded-full border border-kintsugi text-kintsugi hover:bg-kintsugi hover:text-white transition-colors text-sm uppercase tracking-widest disabled:opacity-50 mb-3"
+              >
+                {llmLoading ? "Thinking..." : "Run prompt 3"}
+              </button>
+              <textarea
+                readOnly
+                value={
+                  llm && llm.questions.length > 0
+                    ? llm.questions.map((q, i) => `${i + 1}. ${q}`).join("\n")
+                    : "No response yet."
+                }
+                className="w-full min-h-[120px] rounded-xl border border-gray-300 bg-white px-4 py-3 text-base leading-relaxed text-gray-900 resize-y"
+              />
+              {llmError && <p className="text-sm text-red-500 mt-2">{llmError}</p>}
+              {llm && <p className="text-xs text-gray-400 mt-2">LLM calls remaining: {llm.remaining}</p>}
+            </div>
+
+            <div className="mb-8">
               <h3 className="text-xl font-light mb-3">A small step forward</h3>
               <p className="text-base leading-relaxed text-gray-700 mb-2">
                 To move toward this wish, what is one tiny action you can take right now?
@@ -793,68 +883,6 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
               <p className="text-sm text-gray-500">
                 Example: write it down, make a simple plan, call someone.
               </p>
-            </div>
-
-            <div className="mb-8">
-              <div className="flex items-center justify-between gap-3 mb-4">
-                <h3 className="text-xs uppercase tracking-widest text-ajisai">Insight</h3>
-                <button
-                  onClick={generateInsightWithAI}
-                  disabled={insightLoading}
-                  className="px-4 py-1.5 rounded-full border border-kintsugi text-kintsugi hover:bg-kintsugi hover:text-white transition-colors text-[10px] uppercase tracking-widest disabled:opacity-50"
-                >
-                  {insightLoading ? "Generating..." : "Generate insight with AI"}
-                </button>
-              </div>
-              <textarea
-                readOnly
-                value={insightLoading ? "Generating insight..." : insightText}
-                className="w-full min-h-[160px] rounded-xl border border-gray-300 bg-white px-4 py-3 text-base leading-relaxed text-gray-900 resize-y"
-              />
-              {insightError && <p className="text-sm text-red-500 mt-3">{insightError}</p>}
-              {DEBUG_INSIGHT && (
-                <div className="mt-3 text-[11px] text-gray-500 bg-white/70 border border-gray-100 rounded-lg px-3 py-2">
-                  <p className="uppercase tracking-widest text-[10px] text-gray-400 mb-1">Insight debug</p>
-                  <p>phase: {phase}</p>
-                  <p>reaction: {payload.reaction || "(none)"}</p>
-                  <p>payload.insight: {payload.insight ? "present" : "empty"}</p>
-                  <p>fallbackInsight: {fallbackInsight ? "present" : "empty"}</p>
-                  <p>visibleInsight: {visibleInsight ? "present" : "empty"}</p>
-                </div>
-              )}
-              <div className="mt-6">
-                <button
-                  onClick={analyzePastHighlights}
-                  disabled={highlightsLoading}
-                  className="px-5 py-2 rounded-full border border-kintsugi text-kintsugi hover:bg-kintsugi hover:text-white transition-colors text-xs uppercase tracking-widest disabled:opacity-50"
-                >
-                  {highlightsLoading ? "Analyzing..." : "Analyze with AI using your past highlights"}
-                </button>
-                {highlightsError && <p className="text-sm text-red-500 mt-3">{highlightsError}</p>}
-                {highlightsAnalysis && (
-                  <div className="mt-4 space-y-3 text-gray-700">
-                    {highlightsAnalysis.pattern && (
-                      <p>
-                        <span className="text-xs uppercase tracking-widest text-gray-400 mr-2">Pattern</span>
-                        {highlightsAnalysis.pattern}
-                      </p>
-                    )}
-                    {highlightsAnalysis.guidance && (
-                      <p>
-                        <span className="text-xs uppercase tracking-widest text-gray-400 mr-2">Guidance</span>
-                        {highlightsAnalysis.guidance}
-                      </p>
-                    )}
-                    {highlightsAnalysis.nextAction && (
-                      <p>
-                        <span className="text-xs uppercase tracking-widest text-gray-400 mr-2">Next action</span>
-                        {highlightsAnalysis.nextAction}
-                      </p>
-                    )}
-                    <p className="text-xs text-gray-400">LLM calls remaining: {highlightsAnalysis.remaining}</p>
-                  </div>
-                )}
-              </div>
             </div>
 
             {isGuest && (
@@ -902,39 +930,18 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
               </div>
             )}
 
-            <div className="mb-8">
-              <h3 className="text-xs uppercase tracking-widest text-ajisai mb-4">Reflect with AI</h3>
-              <button
-                onClick={reflectWithAI}
-                disabled={llmLoading}
-                className="px-6 py-3 rounded-full border border-kintsugi text-kintsugi hover:bg-kintsugi hover:text-white transition-colors text-sm uppercase tracking-widest disabled:opacity-50"
-              >
-                {llmLoading ? "Thinking..." : "Mirror, not Oracle"}
-              </button>
-              {llmError && <p className="text-sm text-red-500 mt-2">{llmError}</p>}
-              {llm && (
-                <div className="mt-6 space-y-4">
-                  {llm.questions.length > 0 && (
-                    <div>
-                      <span className="text-xs uppercase tracking-widest text-gray-400">Questions</span>
-                      <ul className="list-disc list-inside mt-2 text-gray-700">
-                        {llm.questions.map((q, i) => (
-                          <li key={i}>{q}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  <p className="text-xs text-gray-400">LLM calls remaining: {llm.remaining}</p>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-auto text-center">
+            <div className="mt-auto flex items-center justify-center gap-8">
               <Link
                 href="/question"
                 className="text-xs uppercase tracking-widest border-b border-gray-300 hover:border-black pb-1 transition-all"
               >
                 Back to Sessions
+              </Link>
+              <Link
+                href="/sessions"
+                className="text-xs uppercase tracking-widest border-b border-gray-300 hover:border-black pb-1 transition-all"
+              >
+                History
               </Link>
             </div>
           </section>
