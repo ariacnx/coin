@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
 
 interface SessionRitualProps {
@@ -9,13 +9,20 @@ interface SessionRitualProps {
   isGuest?: boolean;
 }
 
-type Phase = "intention" | "reflection" | "ritual" | "toss" | "result" | "analysis";
+type Phase = "intention" | "category" | "reflection" | "ritual" | "toss" | "result" | "analysis";
+type CategoryOption = "career" | "relationship" | "others";
+type SpeechField = "decision" | "q-regret" | "q-fear" | "q-future" | "categoryOther";
 
 export function SessionRitual({ sessionId, initialPayload, isGuest = false }: SessionRitualProps) {
-  const startPhase: Phase = initialPayload.decision ? "reflection" : "intention";
+  const DEBUG_INSIGHT = true;
+  const startPhase: Phase = initialPayload.decision
+    ? (initialPayload.category ? "reflection" : "category")
+    : "intention";
   const [phase, setPhase] = useState<Phase>(startPhase);
   const [payload, setPayload] = useState({
     decision: (initialPayload.decision as string) ?? "",
+    category: (initialPayload.category as string) ?? "",
+    categoryOther: (initialPayload.categoryOther as string) ?? "",
     "q-regret": (initialPayload["q-regret"] as string) ?? "",
     "q-fear": (initialPayload["q-fear"] as string) ?? "",
     "q-future": (initialPayload["q-future"] as string) ?? "",
@@ -32,18 +39,53 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
   } | null>(null);
   const [llmLoading, setLlmLoading] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [insightError, setInsightError] = useState<string | null>(null);
+  const [highlightsLoading, setHighlightsLoading] = useState(false);
+  const [highlightsError, setHighlightsError] = useState<string | null>(null);
+  const [highlightsAnalysis, setHighlightsAnalysis] = useState<{
+    pattern: string;
+    guidance: string;
+    nextAction: string;
+    remaining: number;
+  } | null>(null);
   const [coinFlipping, setCoinFlipping] = useState(false);
+  const [categorySuggestion, setCategorySuggestion] = useState<CategoryOption | null>(null);
+  const [categoryLoading, setCategoryLoading] = useState(false);
+  const [categoryError, setCategoryError] = useState<string | null>(null);
+  const categoryRequestedRef = useRef(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+  const [speechTarget, setSpeechTarget] = useState<SpeechField | null>(null);
+  const recognitionRef = useRef<any>(null);
   const [showRegister, setShowRegister] = useState(false);
   const [registerEmail, setRegisterEmail] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
   const [registerStatus, setRegisterStatus] = useState<"idle" | "loading" | "error">("idle");
   const [registerError, setRegisterError] = useState<string | null>(null);
+  const guestStorageHydratedRef = useRef(false);
+  const payloadRef = useRef(payload);
+  const guestStorageKey = `kettei:guest:session:${sessionId}`;
+
+  useEffect(() => {
+    payloadRef.current = payload;
+  }, [payload]);
 
   const savePayload = useCallback(
     async (updates: Partial<typeof payload>) => {
-      const next = { ...payload, ...updates };
+      const latest = payloadRef.current;
+      const next = { ...latest, ...updates };
+      if (DEBUG_INSIGHT && Object.prototype.hasOwnProperty.call(updates, "insight")) {
+        console.log("[INSIGHT] savePayload called", {
+          sessionId,
+          incomingInsight: (updates as { insight?: unknown }).insight,
+          previousInsight: latest.insight,
+          nextInsight: next.insight,
+        });
+      }
       setPayload(next);
-      await fetch(`/api/sessions/${sessionId}`, {
+      const resp = await fetch(`/api/sessions/${sessionId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -54,8 +96,14 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
         }),
         credentials: "include",
       });
+      if (DEBUG_INSIGHT && Object.prototype.hasOwnProperty.call(updates, "insight")) {
+        console.log("[INSIGHT] savePayload persisted", {
+          ok: resp.ok,
+          status: resp.status,
+        });
+      }
     },
-    [sessionId, payload, initialPayload]
+    [sessionId, initialPayload]
   );
 
   const navigate = (p: Phase) => {
@@ -63,8 +111,126 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
     if (p === "ritual") startBreathing();
   };
 
+  useEffect(() => {
+    if (phase !== "category") return;
+    if (categoryRequestedRef.current) return;
+    if (!payload.decision.trim()) return;
+
+    categoryRequestedRef.current = true;
+    setCategoryLoading(true);
+    setCategoryError(null);
+
+    const run = async () => {
+      const res = await fetch("/api/llm/category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ context: payload.decision }),
+        credentials: "include",
+      });
+      setCategoryLoading(false);
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setCategoryError(data.detail ?? "Could not analyze category.");
+        return;
+      }
+
+      const data = await res.json();
+      const normalized: CategoryOption =
+        data.category === "career" || data.category === "relationship" || data.category === "others"
+          ? data.category
+          : "others";
+
+      setCategorySuggestion(normalized);
+      setPayload((prev) => (prev.category ? prev : { ...prev, category: normalized }));
+    };
+
+    void run();
+  }, [phase, payload.decision]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    setSpeechSupported(Boolean(SpeechRecognitionCtor));
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isGuest) return;
+    if (typeof window === "undefined") return;
+    if (guestStorageHydratedRef.current) return;
+
+    guestStorageHydratedRef.current = true;
+    try {
+      const raw = window.localStorage.getItem(guestStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { payload?: Partial<typeof payload>; phase?: Phase };
+      if (parsed.payload && typeof parsed.payload === "object") {
+        setPayload((prev) => ({ ...prev, ...parsed.payload }));
+      }
+      if (parsed.phase) {
+        setPhase(parsed.phase);
+      }
+    } catch {
+      // Ignore malformed local backup
+    }
+  }, [guestStorageKey, isGuest]);
+
+  useEffect(() => {
+    if (!isGuest) return;
+    if (typeof window === "undefined") return;
+    if (!guestStorageHydratedRef.current) return;
+
+    try {
+      window.localStorage.setItem(
+        guestStorageKey,
+        JSON.stringify({
+          payload,
+          phase,
+          updatedAt: Date.now(),
+        })
+      );
+    } catch {
+      // Ignore storage write failures
+    }
+  }, [guestStorageKey, isGuest, payload, phase]);
+
+  useEffect(() => {
+    if (!DEBUG_INSIGHT) return;
+    console.log("[INSIGHT] state change", {
+      phase,
+      reaction: payload.reaction,
+      tossResult: payload.tossResult,
+      payloadInsight: payload.insight,
+      fallbackInsight,
+      visibleInsight,
+    });
+  }, [phase, payload.reaction, payload.tossResult, payload.insight]);
+
   const startBreathing = () => {
     // Animation handled by CSS; button appears after delay
+  };
+
+  const deriveInsight = (reaction: string, tossResult: string | null) => {
+    let insight = "";
+    let score = 0;
+    if (reaction === "Nothing") {
+      insight =
+        "You feel no spark of reaction to this result. This numbness suggests the question you asked is not the real question at hand.";
+      score = 15;
+    } else if (reaction === "Relieved") {
+      insight = `The coin said ${tossResult}, and your soul exhaled. This relief is the clearest signal. Your subconscious was already leaning toward this outcome.`;
+      score = 95;
+    } else if (reaction === "Anxious") {
+      insight = `The coin landed on ${tossResult}, and your immediate reaction was dread or anxiety. If a "Yes" makes you anxious, your answer is "No".`;
+      score = 80;
+    }
+    return { insight, score };
   };
 
   const performToss = () => {
@@ -81,19 +247,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
 
   const selectReaction = (reaction: string) => {
     const { tossResult } = payload;
-    let insight = "";
-    let score = 0;
-    if (reaction === "Nothing") {
-      insight =
-        "You feel no spark of reaction to this result. This numbness suggests the question you asked is not the real question at hand.";
-      score = 15;
-    } else if (reaction === "Relieved") {
-      insight = `The coin said ${tossResult}, and your soul exhaled. This relief is the clearest signal. Your subconscious was already leaning toward this outcome.`;
-      score = 95;
-    } else if (reaction === "Anxious") {
-      insight = `The coin landed on ${tossResult}, and your immediate reaction was dread or anxiety. If a "Yes" makes you anxious, your answer is "No".`;
-      score = 80;
-    }
+    const { insight, score } = deriveInsight(reaction, tossResult);
     savePayload({ reaction, insight, score });
     setPhase("analysis");
   };
@@ -123,10 +277,8 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
     );
   };
 
-  const reflectWithAI = async () => {
-    setLlmLoading(true);
-    setLlmError(null);
-    const context = [
+  const buildReflectContext = () =>
+    [
       payload.decision,
       payload["q-regret"],
       payload["q-fear"],
@@ -136,6 +288,11 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
     ]
       .filter(Boolean)
       .join("\n");
+
+  const reflectWithAI = async () => {
+    setLlmLoading(true);
+    setLlmError(null);
+    const context = buildReflectContext();
 
     const res = await fetch("/api/llm/reflect", {
       method: "POST",
@@ -147,13 +304,172 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
 
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      if (data.error === "quota_exceeded") setLlmError("Quota exceeded (10 free calls).");
+      if (data.error === "quota_exceeded") setLlmError("Quota exceeded (100 free calls).");
       else setLlmError(data.detail ?? "Something went wrong.");
+      if (DEBUG_INSIGHT) {
+        console.log("[INSIGHT] reflectWithAI failed", data);
+      }
       return;
     }
     const data = await res.json();
+    if (DEBUG_INSIGHT) {
+      console.log("[INSIGHT] reflectWithAI success", data);
+    }
     setLlm({ questions: data.questions, summary: data.summary, patternHint: data.patternHint, remaining: data.remaining });
+
+    // Keep the main Insight panel in sync with Mirror output
+    const mirrorInsight = [data.summary, data.patternHint]
+      .map((x: unknown) => (typeof x === "string" ? x.trim() : ""))
+      .filter(Boolean)
+      .join(" ");
+    if (mirrorInsight) {
+      await savePayload({ insight: mirrorInsight });
+      setInsightError(null);
+    } else if (DEBUG_INSIGHT) {
+      console.log("[INSIGHT] reflectWithAI returned empty summary/patternHint");
+    }
   };
+
+  const generateInsightWithAI = async () => {
+    setInsightLoading(true);
+    setInsightError(null);
+    const context = buildReflectContext();
+
+    const res = await fetch("/api/llm/reflect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ context }),
+      credentials: "include",
+    });
+    setInsightLoading(false);
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (data.error === "quota_exceeded") setInsightError("Quota exceeded (100 free calls).");
+      else setInsightError(data.detail ?? "Could not generate insight.");
+      if (DEBUG_INSIGHT) {
+        console.log("[INSIGHT] generateInsightWithAI failed", data);
+      }
+      return;
+    }
+
+    const data = await res.json();
+    if (DEBUG_INSIGHT) {
+      console.log("[INSIGHT] generateInsightWithAI success", data);
+    }
+    const nextInsight = [data.summary, data.patternHint]
+      .map((x: unknown) => (typeof x === "string" ? x.trim() : ""))
+      .filter(Boolean)
+      .join(" ");
+    if (!nextInsight) {
+      const fallbackQuestion = Array.isArray(data.questions) && data.questions.length > 0 ? String(data.questions[0]) : "";
+      if (fallbackQuestion) {
+        await savePayload({ insight: fallbackQuestion });
+        setInsightError(null);
+        return;
+      }
+      setInsightError("No insight returned from model. Try again.");
+      return;
+    }
+
+    await savePayload({ insight: nextInsight });
+  };
+
+  const analyzePastHighlights = async () => {
+    setHighlightsLoading(true);
+    setHighlightsError(null);
+    setHighlightsAnalysis(null);
+
+    const res = await fetch("/api/llm/highlights", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentSessionId: sessionId }),
+      credentials: "include",
+    });
+    setHighlightsLoading(false);
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (data.error === "quota_exceeded") setHighlightsError("Quota exceeded (100 free calls).");
+      else if (data.error === "no_highlights") setHighlightsError("No past highlights yet.");
+      else setHighlightsError(data.detail ?? "Could not analyze past highlights.");
+      return;
+    }
+
+    const data = await res.json();
+    setHighlightsAnalysis({
+      pattern: data.pattern ?? "",
+      guidance: data.guidance ?? "",
+      nextAction: data.nextAction ?? "",
+      remaining: data.remaining ?? 0,
+    });
+  };
+
+  function toggleSpeech(field: SpeechField) {
+    if (typeof window === "undefined") return;
+    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) {
+      setSpeechError("Voice input is not supported in this browser.");
+      return;
+    }
+    setSpeechError(null);
+
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const recognition = new SpeechRecognitionCtor();
+    recognitionRef.current = recognition;
+    recognition.lang = "en-US";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    const baseText = (payload[field] as string) || "";
+    recognition.onresult = (event: any) => {
+      let transcript = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      const next = [baseText.trim(), transcript.trim()].filter(Boolean).join(baseText.trim() ? " " : "");
+      setPayload((prev) => ({ ...prev, [field]: next }));
+    };
+
+    recognition.onerror = (event: any) => {
+      setSpeechError(`Voice input error: ${event.error}`);
+      setIsListening(false);
+      setSpeechTarget(null);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      setSpeechTarget(null);
+    };
+
+    try {
+      setIsListening(true);
+      setSpeechTarget(field);
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      setSpeechTarget(null);
+      setSpeechError("Could not start voice input. Try again.");
+    }
+  }
+
+  const micLabel = (field: SpeechField) => {
+    if (!speechSupported) return "Voice input unavailable";
+    if (isListening && speechTarget === field) return "Listening...";
+    return "Tap to Speak";
+  };
+
+  const selectedCategory = payload.category as CategoryOption | "";
+  const categoryValid =
+    selectedCategory === "career" ||
+    selectedCategory === "relationship" ||
+    (selectedCategory === "others" && payload.categoryOther.trim().length > 0);
+  const fallbackInsight = payload.reaction ? deriveInsight(payload.reaction, payload.tossResult).insight : "";
+  const visibleInsight = payload.insight || fallbackInsight;
 
   const showPhase = (p: Phase) => phase === p;
 
@@ -163,7 +479,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
         <Link href="/" className="text-xs uppercase tracking-[0.3em] font-medium text-gray-400 hover:text-sumi">
           Kettei <span className="opacity-50">/ 決定</span>
         </Link>
-        <Link href="/" className="text-xs uppercase tracking-widest text-gray-400 hover:text-sumi">
+        <Link href="/question" className="text-xs uppercase tracking-widest text-gray-400 hover:text-sumi">
           ← Sessions
         </Link>
       </nav>
@@ -174,7 +490,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
           <section className="absolute inset-0 p-8 md:p-16 flex flex-col justify-center">
             <p className="text-xs text-ajisai uppercase tracking-widest mb-4">Phase I: The Crossroad</p>
             <h1 className="text-3xl md:text-4xl font-light leading-tight mb-12">
-              What decision weighs on your mind today?
+              Tell me, in this very moment, what decisions weigh on your heart
             </h1>
             <textarea
               value={payload.decision}
@@ -183,9 +499,20 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
               placeholder="Speak your truth or write it here..."
               className="input-underline w-full py-4 text-xl font-light resize-none h-32 bg-transparent placeholder-gray-300 mb-12"
             />
+            <button
+              type="button"
+              onClick={() => toggleSpeech("decision")}
+              disabled={!speechSupported}
+              className="mb-8 flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className={isListening && speechTarget === "decision" ? "text-kintsugi" : ""}>
+                {isListening && speechTarget === "decision" ? "●" : "🎤"}
+              </span>
+              <span>{micLabel("decision")}</span>
+            </button>
             <div className="mt-auto flex justify-end">
               <button
-                onClick={() => navigate("reflection")}
+                onClick={() => navigate("category")}
                 className="group flex items-center gap-4 px-8 py-3 rounded-full border border-gray-200 hover:border-kintsugi transition-all"
               >
                 <span className="text-xs uppercase tracking-widest text-gray-500 group-hover:text-black">
@@ -197,15 +524,94 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
           </section>
         )}
 
+        {/* Phase II: Category */}
+        {showPhase("category") && (
+          <section className="absolute inset-0 p-8 md:p-16 flex flex-col justify-center">
+            <p className="text-xs text-ajisai uppercase tracking-widest mb-4">Phase II: Category</p>
+            <h2 className="text-2xl md:text-3xl font-light leading-tight mb-8">
+              {categorySuggestion
+                ? `I sense this question is about ${categorySuggestion}.`
+                : "I sense this question is about..."}
+            </h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+              {(["career", "relationship", "others"] as CategoryOption[]).map((cat) => {
+                const active = selectedCategory === cat;
+                return (
+                  <button
+                    key={cat}
+                    onClick={() => setPayload((p) => ({ ...p, category: cat }))}
+                    className={`px-4 py-3 rounded-xl border text-sm uppercase tracking-widest transition-colors ${
+                      active
+                        ? "border-kintsugi bg-kintsugi text-white"
+                        : "border-gray-200 text-gray-500 hover:border-kintsugi hover:text-black"
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                );
+              })}
+            </div>
+
+            {selectedCategory === "others" && (
+              <div className="mb-4">
+                <input
+                  type="text"
+                  value={payload.categoryOther}
+                  onChange={(e) => setPayload((p) => ({ ...p, categoryOther: e.target.value }))}
+                  placeholder="Type your category..."
+                  className="input-underline w-full py-2 bg-transparent mb-3"
+                />
+                <button
+                  type="button"
+                  onClick={() => toggleSpeech("categoryOther")}
+                  disabled={!speechSupported}
+                  className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className={isListening && speechTarget === "categoryOther" ? "text-kintsugi" : ""}>
+                    {isListening && speechTarget === "categoryOther" ? "●" : "🎤"}
+                  </span>
+                  <span>{micLabel("categoryOther")}</span>
+                </button>
+              </div>
+            )}
+
+            {categoryLoading && <p className="text-sm text-gray-400 mb-4">Analyzing...</p>}
+            {categoryError && <p className="text-sm text-red-500 mb-4">{categoryError}</p>}
+
+            <div className="mt-6 flex justify-between items-center">
+              <button
+                onClick={() => navigate("intention")}
+                className="text-xs uppercase tracking-widest text-gray-400 hover:text-black"
+              >
+                Back
+              </button>
+              <button
+                onClick={async () => {
+                  await savePayload({
+                    category: selectedCategory || "others",
+                    categoryOther: selectedCategory === "others" ? payload.categoryOther : "",
+                  });
+                  navigate("reflection");
+                }}
+                disabled={!categoryValid}
+                className="group flex items-center gap-4 px-8 py-3 rounded-full bg-sumi text-white hover:bg-black transition-all disabled:opacity-50"
+              >
+                <span className="text-xs uppercase tracking-widest">Continue</span>
+              </button>
+            </div>
+          </section>
+        )}
+
         {/* Phase II: Reflection */}
         {showPhase("reflection") && (
           <section className="absolute inset-0 p-8 md:p-16 flex flex-col overflow-y-auto">
-            <p className="text-xs text-ajisai uppercase tracking-widest mb-4">Phase II: Reflection</p>
+            <p className="text-xs text-ajisai uppercase tracking-widest mb-4">Phase III: Reflection</p>
             <h2 className="text-2xl font-light mb-10">Examine the shadows of this choice.</h2>
             <div className="space-y-12 mb-16">
               <div>
                 <label className="block text-sm font-medium mb-3">
-                  Would you regret <span className="italic">not</span> taking this path?
+                  What would you do if no one else&apos;s expectations existed?
                 </label>
                 <input
                   type="text"
@@ -213,8 +619,19 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
                   onChange={(e) => setPayload((p) => ({ ...p, "q-regret": e.target.value }))}
                   onBlur={() => savePayload({ "q-regret": payload["q-regret"] })}
                   className="input-underline w-full py-2 bg-transparent"
-                  placeholder="Why or why not?"
+                  placeholder="Speak freely..."
                 />
+                <button
+                  type="button"
+                  onClick={() => toggleSpeech("q-regret")}
+                  disabled={!speechSupported}
+                  className="mt-3 flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className={isListening && speechTarget === "q-regret" ? "text-kintsugi" : ""}>
+                    {isListening && speechTarget === "q-regret" ? "●" : "🎤"}
+                  </span>
+                  <span>{micLabel("q-regret")}</span>
+                </button>
               </div>
               <div>
                 <label className="block text-sm font-medium mb-3">What is the heaviest fear holding you back?</label>
@@ -226,9 +643,20 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
                   className="input-underline w-full py-2 bg-transparent"
                   placeholder="Name the fear..."
                 />
+                <button
+                  type="button"
+                  onClick={() => toggleSpeech("q-fear")}
+                  disabled={!speechSupported}
+                  className="mt-3 flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className={isListening && speechTarget === "q-fear" ? "text-kintsugi" : ""}>
+                    {isListening && speechTarget === "q-fear" ? "●" : "🎤"}
+                  </span>
+                  <span>{micLabel("q-fear")}</span>
+                </button>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-3">Where is the &apos;You&apos; of one year from now?</label>
+                <label className="block text-sm font-medium mb-3">A year from now, what kind of life are you living?</label>
                 <input
                   type="text"
                   value={payload["q-future"]}
@@ -237,11 +665,23 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
                   className="input-underline w-full py-2 bg-transparent"
                   placeholder="Visualize the outcome..."
                 />
+                <button
+                  type="button"
+                  onClick={() => toggleSpeech("q-future")}
+                  disabled={!speechSupported}
+                  className="mt-3 flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className={isListening && speechTarget === "q-future" ? "text-kintsugi" : ""}>
+                    {isListening && speechTarget === "q-future" ? "●" : "🎤"}
+                  </span>
+                  <span>{micLabel("q-future")}</span>
+                </button>
               </div>
             </div>
+            {speechError && <p className="text-sm text-red-500 mb-4">{speechError}</p>}
             <div className="mt-auto flex justify-between items-center pb-8">
               <button
-                onClick={() => navigate("intention")}
+                onClick={() => navigate("category")}
                 className="text-xs uppercase tracking-widest text-gray-400 hover:text-black"
               >
                 Back
@@ -327,26 +767,89 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
         {/* Phase VI: Analysis + Reflect with AI */}
         {showPhase("analysis") && (
           <section className="absolute inset-0 p-8 md:p-16 flex flex-col overflow-y-auto">
-            <div className="inline-block px-3 py-1 border border-kintsugi rounded-full text-[10px] uppercase tracking-widest text-kintsugi mb-4">
-              Phase VI: The Mirror Review
-            </div>
-            <h2 className="text-3xl font-light mb-10">The mirror reveals your truth.</h2>
+            <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-2">The Coin Said</p>
+            <p className="text-3xl font-light text-kintsugi mb-8">{payload.tossResult}</p>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-              <div className="bg-white/60 p-6 rounded-2xl border border-white">
-                <span className="text-[10px] uppercase tracking-widest text-gray-400 mb-2 block">Your Gut Feeling</span>
-                <span className="text-xl font-medium">{payload.reaction === "Nothing" ? "Numbness" : payload.reaction}</span>
-              </div>
-              <div className="bg-sumi text-white p-6 rounded-2xl flex flex-col justify-center items-center text-center">
-                <span className="text-[10px] uppercase tracking-widest opacity-60 mb-2 block">The Coin Said</span>
-                <span className="text-3xl font-light text-kintsugi">{payload.tossResult}</span>
-              </div>
+            <h2 className="text-3xl font-light mb-4">Go with it. Your heart has long known the answer.</h2>
+            <p className="text-lg leading-relaxed font-light text-gray-700 whitespace-pre-line mb-8">
+              {"Hesitation is only the moment\nwhen you finally acknowledge the truth\nyou were once unwilling to admit-\ndeep down, you already want this outcome."}
+            </p>
+
+            <div className="mb-8">
+              <h3 className="text-xl font-light mb-3">A small step forward</h3>
+              <p className="text-base leading-relaxed text-gray-700 mb-2">
+                To move toward this wish, what is one tiny action you can take right now?
+              </p>
+              <p className="text-sm text-gray-500">
+                Example: write it down, make a simple plan, call someone.
+              </p>
             </div>
 
             <div className="bg-paper p-8 rounded-2xl border border-gray-200 mb-8 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-1 h-full bg-kintsugi" />
-              <h3 className="text-xs uppercase tracking-widest text-ajisai mb-4">Insight</h3>
-              <p className="text-lg leading-relaxed font-light italic text-gray-700">{payload.insight}</p>
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <h3 className="text-xs uppercase tracking-widest text-ajisai">Insight</h3>
+                <button
+                  onClick={generateInsightWithAI}
+                  disabled={insightLoading}
+                  className="px-4 py-1.5 rounded-full border border-kintsugi text-kintsugi hover:bg-kintsugi hover:text-white transition-colors text-[10px] uppercase tracking-widest disabled:opacity-50"
+                >
+                  {insightLoading ? "Generating..." : "Generate insight with AI"}
+                </button>
+              </div>
+              <div className="bg-white/80 border border-gray-100 rounded-xl px-5 py-4 min-h-[92px]">
+                {insightLoading ? (
+                  <p className="text-sm text-gray-500">Generating insight...</p>
+                ) : (
+                  <p className="text-base md:text-lg leading-relaxed font-light text-gray-800 whitespace-pre-line">
+                    {visibleInsight || "No insight yet. Click 'Generate insight with AI' to populate this section."}
+                  </p>
+                )}
+              </div>
+              {insightError && <p className="text-sm text-red-500 mt-3">{insightError}</p>}
+              {DEBUG_INSIGHT && (
+                <div className="mt-3 text-[11px] text-gray-500 bg-white/70 border border-gray-100 rounded-lg px-3 py-2">
+                  <p className="uppercase tracking-widest text-[10px] text-gray-400 mb-1">Insight debug</p>
+                  <p>phase: {phase}</p>
+                  <p>reaction: {payload.reaction || "(none)"}</p>
+                  <p>payload.insight: {payload.insight ? "present" : "empty"}</p>
+                  <p>fallbackInsight: {fallbackInsight ? "present" : "empty"}</p>
+                  <p>visibleInsight: {visibleInsight ? "present" : "empty"}</p>
+                </div>
+              )}
+              <div className="mt-6">
+                <button
+                  onClick={analyzePastHighlights}
+                  disabled={highlightsLoading}
+                  className="px-5 py-2 rounded-full border border-kintsugi text-kintsugi hover:bg-kintsugi hover:text-white transition-colors text-xs uppercase tracking-widest disabled:opacity-50"
+                >
+                  {highlightsLoading ? "Analyzing..." : "Analyze with AI using your past highlights"}
+                </button>
+                {highlightsError && <p className="text-sm text-red-500 mt-3">{highlightsError}</p>}
+                {highlightsAnalysis && (
+                  <div className="mt-4 space-y-3 text-gray-700">
+                    {highlightsAnalysis.pattern && (
+                      <p>
+                        <span className="text-xs uppercase tracking-widest text-gray-400 mr-2">Pattern</span>
+                        {highlightsAnalysis.pattern}
+                      </p>
+                    )}
+                    {highlightsAnalysis.guidance && (
+                      <p>
+                        <span className="text-xs uppercase tracking-widest text-gray-400 mr-2">Guidance</span>
+                        {highlightsAnalysis.guidance}
+                      </p>
+                    )}
+                    {highlightsAnalysis.nextAction && (
+                      <p>
+                        <span className="text-xs uppercase tracking-widest text-gray-400 mr-2">Next action</span>
+                        {highlightsAnalysis.nextAction}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-400">LLM calls remaining: {highlightsAnalysis.remaining}</p>
+                  </div>
+                )}
+              </div>
             </div>
 
             {isGuest && (
@@ -435,7 +938,7 @@ export function SessionRitual({ sessionId, initialPayload, isGuest = false }: Se
 
             <div className="mt-auto text-center">
               <Link
-                href="/"
+                href="/question"
                 className="text-xs uppercase tracking-widest border-b border-gray-300 hover:border-black pb-1 transition-all"
               >
                 Back to Sessions

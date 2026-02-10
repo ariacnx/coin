@@ -22,7 +22,7 @@ export default function LoginPage() {
     });
 
     if (res.ok) {
-      window.location.href = "/";
+      window.location.href = "/question";
       return;
     }
 

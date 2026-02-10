@@ -13,13 +13,13 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
   const req = new Request("http://localhost", { headers: Object.fromEntries(headersList) });
   const userId = await getUserIdFromRequest(req);
 
-  if (!userId) redirect("/");
+  if (!userId) redirect("/question");
 
   const r = await pool.query(
     "select s.payload_json, u.email from sessions s join users u on u.id = s.user_id where s.id = $1 and s.user_id = $2 and s.deleted_at is null",
     [id, userId]
   );
-  if (r.rows.length === 0) redirect("/");
+  if (r.rows.length === 0) redirect("/question");
 
   const payload = (r.rows[0].payload_json ?? {}) as Record<string, unknown>;
   const isGuest = r.rows[0].email == null;

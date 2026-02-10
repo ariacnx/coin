@@ -1,6 +1,6 @@
 import { pool } from "./db";
 
-const LLM_QUOTA = 10;
+const LLM_QUOTA = 100;
 
 export async function getLlmUsage(userId: string): Promise<number> {
   const r = await pool.query(

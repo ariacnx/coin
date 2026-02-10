@@ -7,20 +7,96 @@
   --ink-sumi: #4a4a4a;
   --gold-kintsugi: #d4af37;
   --accent-ajisai: #8c92ac;
+  /* Dusty-but-rich (muted saturation) clouds */
+  --cloud-pink: rgba(205, 160, 176, 0.52);
+  --cloud-blue: rgba(154, 178, 202, 0.52);
+  --cloud-lilac: rgba(186, 170, 196, 0.44);
 }
 
 body {
-  background-color: var(--bg-paper);
+  background-color: #f5f1f4;
   color: var(--ink-sumi);
   -webkit-font-smoothing: antialiased;
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: -15%;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    /* Soft cloud silhouettes */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800'%3E%3Cdefs%3E%3Cfilter id='b'%3E%3CfeGaussianBlur stdDeviation='16'/%3E%3C/filter%3E%3C/defs%3E%3Cg filter='url(%23b)' fill='rgba(255,255,255,0.46)'%3E%3Cellipse cx='220' cy='260' rx='170' ry='92'/%3E%3Cellipse cx='340' cy='240' rx='130' ry='80'/%3E%3Cellipse cx='450' cy='270' rx='190' ry='100'/%3E%3Cellipse cx='840' cy='180' rx='210' ry='110'/%3E%3Cellipse cx='980' cy='200' rx='160' ry='92'/%3E%3Cellipse cx='930' cy='300' rx='240' ry='120'/%3E%3Cellipse cx='330' cy='560' rx='240' ry='120'/%3E%3Cellipse cx='520' cy='600' rx='220' ry='110'/%3E%3Cellipse cx='760' cy='560' rx='220' ry='110'/%3E%3Cellipse cx='900' cy='600' rx='260' ry='130'/%3E%3C/g%3E%3C/svg%3E"),
+    radial-gradient(closest-side at 18% 26%, var(--cloud-pink), transparent 62%),
+    radial-gradient(closest-side at 74% 18%, var(--cloud-blue), transparent 60%),
+    radial-gradient(closest-side at 62% 78%, rgba(238, 226, 232, 0.52), transparent 62%),
+    radial-gradient(closest-side at 22% 82%, rgba(208, 223, 238, 0.46), transparent 65%),
+    radial-gradient(closest-side at 48% 44%, var(--cloud-lilac), transparent 64%),
+    linear-gradient(135deg, rgba(251, 248, 249, 0.96), rgba(245, 248, 251, 0.96));
+  background-repeat: repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-size: 980px 660px, auto, auto, auto, auto, auto, auto;
+  filter: blur(52px) saturate(0.92) contrast(0.98) brightness(1.02);
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1.04);
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.16;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 500 500' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body::before {
+    animation: cloudDrift 18s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes cloudDrift {
+  from {
+    transform: translate3d(-1.2%, -0.8%, 0) scale(1.04);
+  }
+  to {
+    transform: translate3d(1.2%, 1.0%, 0) scale(1.08);
+  }
 }
 
 .glass-panel {
-  background: rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.05);
+  position: relative;
+  z-index: 0;
+  background: rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(26px) saturate(1.08);
+  -webkit-backdrop-filter: blur(26px) saturate(1.08);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow:
+    0 30px 90px rgba(40, 25, 45, 0.10),
+    0 10px 30px rgba(40, 25, 45, 0.06);
+  -webkit-mask-image: radial-gradient(140% 120% at 50% 50%, #000 64%, transparent 100%);
+  mask-image: radial-gradient(140% 120% at 50% 50%, #000 64%, transparent 100%);
+}
+
+.glass-panel::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0.75;
+  background:
+    radial-gradient(closest-side at 18% 26%, rgba(255, 255, 255, 0.55), transparent 62%),
+    radial-gradient(closest-side at 74% 18%, rgba(255, 255, 255, 0.42), transparent 60%),
+    radial-gradient(closest-side at 58% 82%, rgba(255, 255, 255, 0.35), transparent 62%);
+  filter: blur(18px);
 }
 
 .input-underline {
